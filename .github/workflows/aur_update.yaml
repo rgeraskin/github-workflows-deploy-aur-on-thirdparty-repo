@@ -1,0 +1,47 @@
+# yamllint disable rule:key-ordering
+name: Update AUR package
+
+# yamllint disable-line rule:truthy
+on:
+  workflow_call:
+    inputs:
+      username:
+        required: true
+        type: string
+    secrets:
+      email:
+        required: true
+      ssh_private_key:
+        required: true
+
+jobs:
+  aur-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ref: ${{ github.ref }}
+      - name: Extract PKGNAME
+        id: pkgname
+        run: echo ::set-output name=pkgname::$(grep pkgname= PKGBUILD.template | cut -b 9-)
+      - name: Extract PKGVER
+        id: pkgver
+        run: echo ::set-output name=pkgver::$(cat latest_release | cut -b 2-)
+      - name: Template PKGBUILD
+        run: |
+          export PKGVER=${{ steps.pkgver.outputs.pkgver }}
+          envsubst '$PKGVER' < PKGBUILD.template > PKGBUILD
+          cat PKGBUILD
+      - name: Publish AUR package
+        uses: rgeraskin/github-actions-deploy-aur@master
+        with:
+          pkgname: ${{ steps.pkgname.outputs.pkgname }}
+          pkgbuild: ./PKGBUILD
+          updpkgsums: true
+          makepkg: true
+          commit_username: ${{ inputs.username }}
+          commit_email: ${{ secrets.email }}
+          ssh_private_key: ${{ secrets.ssh_private_key }}
+          commit_message: ver ${{ steps.pkgver.outputs.pkgver }}
+          allow_empty_commits: false
+          ssh_keyscan_types: rsa,dsa,ecdsa,ed25519
