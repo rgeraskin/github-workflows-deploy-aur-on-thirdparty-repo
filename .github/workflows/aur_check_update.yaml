@@ -1,0 +1,86 @@
+# yamllint disable rule:key-ordering
+name: Check latest release version and update AUR package
+
+# yamllint disable-line rule:truthy
+on:
+  workflow_call:
+    inputs:
+      aur_username:
+        required: true
+        type: string
+      updater_release_url:
+        required: true
+        type: string
+      updater_username:
+        required: true
+        type: string
+    secrets:
+      aur_email:
+        required: true
+      aur_ssh_private_key:
+        required: true
+      updater_email:
+        required: true
+
+jobs:
+  get_latest:
+    runs-on: ubuntu-latest
+
+    outputs:
+      version: ${{ steps.get_latest.outputs.version }}
+      version_changed: ${{ steps.check_version.outputs.changed }}
+
+    steps:
+      - uses: actions/checkout@v3
+      - name: Fetch release version
+        run: >
+          curl -sL ${{ inputs.updater_release_url }} |
+          jq -r ".tag_name" |
+          cut -b 2- > latest_release
+      - name: Extract latest release version
+        id: get_latest
+        run: echo ::set-output name=version::$(cat latest_release)
+      - name: Check if release changed
+        id: check_version
+        run: >
+          echo ::set-output name=changed::$([ -z "`git status --porcelain`" ]
+          && echo "false" || echo "true")
+
+  aur-publish:
+    runs-on: ubuntu-latest
+    needs: get_latest
+    if: needs.get_latest.outputs.version_changed == 'true'
+    steps:
+      - uses: actions/checkout@v3
+      - name: Extract PKGNAME
+        id: pkgname
+        run: >
+          echo ::set-output name=pkgname::$(
+          grep pkgname= PKGBUILD.template | cut -b 9-)
+      - name: Template PKGBUILD
+        run: |
+          export PKGVER=${{ needs.get_latest.outputs.version }}
+          envsubst '$PKGVER' < PKGBUILD.template > PKGBUILD
+          cat PKGBUILD
+      - name: Publish AUR package
+        uses: rgeraskin/github-actions-deploy-aur@master
+        with:
+          pkgname: ${{ steps.pkgname.outputs.pkgname }}
+          pkgbuild: ./PKGBUILD
+          updpkgsums: true
+          test: true
+          commit_username: ${{ inputs.aur_username }}
+          commit_email: ${{ secrets.aur_email }}
+          ssh_private_key: ${{ secrets.aur_ssh_private_key }}
+          commit_message: ver ${{ needs.get_latest.outputs.version }}
+          allow_empty_commits: false
+          ssh_keyscan_types: rsa,dsa,ecdsa,ed25519
+      - name: Update latest_release file
+        run: echo "${{ needs.get_latest.outputs.version }}" > latest_release
+      - name: Commit latest release version
+        run: |
+          git config --global user.name "${{ inputs.updater_username }}"
+          git config --global user.email "${{ secrets.updater_email }}"
+          git add latest_release
+          git commit -m "New release version: $(cat latest_release)"
+          git push
